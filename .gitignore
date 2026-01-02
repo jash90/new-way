@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+.turbo/
+*.tsbuildinfo
+dist/
+.next/
+out/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# System
+.DS_Store
+Thumbs.db
+
+# Claude Flow
+.swarm/
+.claude-flow/
+
+# Environment
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Logs
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Testing
+coverage/
+
+# Prisma
+packages/db/prisma/*.db
+packages/db/prisma/*.db-journal
