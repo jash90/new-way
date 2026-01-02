@@ -1,0 +1,2019 @@
+// KsięgowaCRM - Authentication & Identity Management Schema
+// BMAD AIM Module - Prisma Schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ===========================================
+// USER & AUTHENTICATION (AIM-001, AIM-002, AIM-003)
+// ===========================================
+
+enum UserStatus {
+  pending_verification
+  active
+  suspended
+  deleted
+}
+
+model User {
+  id                  String    @id @default(uuid()) @db.Uuid
+  email               String    @unique @db.VarChar(255)
+  passwordHash        String    @map("password_hash") @db.VarChar(255)
+  status              UserStatus @default(pending_verification)
+  emailVerifiedAt     DateTime? @map("email_verified_at")
+  lastLoginAt         DateTime? @map("last_login_at")
+  failedLoginAttempts Int       @default(0) @map("failed_login_attempts")
+  lockedUntil         DateTime? @map("locked_until")
+  passwordChangedAt   DateTime? @map("password_changed_at")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  profile             UserProfile?
+  emailVerifications  EmailVerification[]
+  passwordResets      PasswordResetToken[]
+  sessions            Session[]
+  loginAttempts       LoginAttempt[]
+  devices             UserDevice[]
+  mfaConfiguration    MfaConfiguration?
+  mfaBackupCodes      MfaBackupCode[]
+  mfaChallenges       MfaChallenge[]
+  userRoles           UserRole[]
+  userPermissions     UserPermission[]
+  permissionCache     UserPermissionCache?
+  auditLogs           AuthAuditLog[]        @relation("AuditActor")
+  targetedAuditLogs   AuthAuditLog[]        @relation("AuditTarget")
+  securityAlerts      SecurityAlert[]
+  notificationSubs    NotificationSubscription[]
+
+  // Role management relations
+  rolesCreated        Role[]    @relation("RoleCreatedBy")
+  rolesUpdated        Role[]    @relation("RoleUpdatedBy")
+  rolesGranted        UserRole[] @relation("RoleGrantedBy")
+  rolesRevoked        UserRole[] @relation("RoleRevokedBy")
+  permissionsGranted  RolePermission[] @relation("PermissionGrantedBy")
+
+  @@index([email])
+  @@index([status])
+  @@map("users")
+}
+
+model UserProfile {
+  id            String   @id @default(uuid()) @db.Uuid
+  userId        String   @unique @map("user_id") @db.Uuid
+  firstName     String?  @map("first_name") @db.VarChar(100)
+  lastName      String?  @map("last_name") @db.VarChar(100)
+  displayName   String?  @map("display_name") @db.VarChar(200)
+  phone         String?  @db.VarChar(20)
+  avatarUrl     String?  @map("avatar_url") @db.VarChar(500)
+  locale        String   @default("pl") @db.VarChar(10)
+  timezone      String   @default("Europe/Warsaw") @db.VarChar(50)
+  companyName   String?  @map("company_name") @db.VarChar(200)
+  nip           String?  @db.VarChar(10)
+  regon         String?  @db.VarChar(14)
+  onboardingStep Int     @default(0) @map("onboarding_step")
+  onboardingCompletedAt DateTime? @map("onboarding_completed_at")
+  metadata      Json     @default("{}")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([nip])
+  @@map("user_profiles")
+}
+
+// ===========================================
+// EMAIL VERIFICATION (AIM-001)
+// ===========================================
+
+model EmailVerification {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @map("token_hash") @db.VarChar(255)
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("email_verifications")
+}
+
+// ===========================================
+// PASSWORD RESET (AIM-004)
+// ===========================================
+
+model PasswordResetToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @map("token_hash") @db.VarChar(255)
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  ipAddress String?   @map("ip_address") @db.VarChar(45)
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("password_reset_tokens")
+}
+
+model PasswordHistory {
+  id           String   @id @default(uuid()) @db.Uuid
+  userId       String   @map("user_id") @db.Uuid
+  passwordHash String   @map("password_hash") @db.VarChar(255)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@map("password_history")
+}
+
+// ===========================================
+// LOGIN ATTEMPTS TRACKING (AIM-003)
+// ===========================================
+
+enum LoginAttemptStatus {
+  success
+  failed_invalid_credentials
+  failed_account_locked
+  failed_not_verified
+  failed_mfa_required
+  failed_rate_limited
+}
+
+model LoginAttempt {
+  id              String             @id @default(uuid()) @db.Uuid
+  userId          String?            @map("user_id") @db.Uuid
+  email           String             @db.VarChar(255) // Store email even for non-existent users
+  status          LoginAttemptStatus
+  ipAddress       String             @map("ip_address") @db.VarChar(45)
+  userAgent       String?            @map("user_agent") @db.VarChar(500)
+  deviceFingerprint String?          @map("device_fingerprint") @db.VarChar(255)
+  city            String?            @db.VarChar(100)
+  country         String?            @db.VarChar(100)
+  failureReason   String?            @map("failure_reason") @db.VarChar(255)
+  createdAt       DateTime           @default(now()) @map("created_at")
+
+  user            User?              @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([email])
+  @@index([ipAddress])
+  @@index([createdAt])
+  @@map("login_attempts")
+}
+
+// ===========================================
+// USER DEVICES (AIM-003)
+// ===========================================
+
+model UserDevice {
+  id              String    @id @default(uuid()) @db.Uuid
+  userId          String    @map("user_id") @db.Uuid
+  fingerprint     String    @db.VarChar(255)
+  name            String?   @db.VarChar(100) // e.g., "Chrome on Windows"
+  browserName     String?   @map("browser_name") @db.VarChar(50)
+  browserVersion  String?   @map("browser_version") @db.VarChar(20)
+  osName          String?   @map("os_name") @db.VarChar(50)
+  osVersion       String?   @map("os_version") @db.VarChar(20)
+  deviceType      String?   @map("device_type") @db.VarChar(20) // desktop, mobile, tablet
+  isTrusted       Boolean   @default(false) @map("is_trusted")
+  trustedAt       DateTime? @map("trusted_at")
+  lastUsedAt      DateTime  @default(now()) @map("last_used_at")
+  lastIpAddress   String?   @map("last_ip_address") @db.VarChar(45)
+  lastCity        String?   @map("last_city") @db.VarChar(100)
+  lastCountry     String?   @map("last_country") @db.VarChar(100)
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessions        Session[]
+
+  @@unique([userId, fingerprint])
+  @@index([userId])
+  @@index([fingerprint])
+  @@map("user_devices")
+}
+
+// ===========================================
+// SESSION MANAGEMENT (AIM-003, AIM-005, AIM-006)
+// ===========================================
+
+model Session {
+  id              String      @id @default(uuid()) @db.Uuid
+  userId          String      @map("user_id") @db.Uuid
+  deviceId        String?     @map("device_id") @db.Uuid
+  tokenHash       String      @map("token_hash") @db.VarChar(255)
+  refreshTokenHash String?    @map("refresh_token_hash") @db.VarChar(255)
+  deviceFingerprint String?   @map("device_fingerprint") @db.VarChar(255)
+  userAgent       String?     @map("user_agent") @db.VarChar(500)
+  ipAddress       String?     @map("ip_address") @db.VarChar(45)
+  city            String?     @db.VarChar(100)
+  country         String?     @db.VarChar(100)
+  isActive        Boolean     @default(true) @map("is_active")
+  isRemembered    Boolean     @default(false) @map("is_remembered")
+  lastActivityAt  DateTime    @default(now()) @map("last_activity_at")
+  expiresAt       DateTime    @map("expires_at")
+  revokedAt       DateTime?   @map("revoked_at")
+  revokeReason    String?     @map("revoke_reason") @db.VarChar(255)
+  createdAt       DateTime    @default(now()) @map("created_at")
+
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  device          UserDevice? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([deviceId])
+  @@index([tokenHash])
+  @@index([isActive])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model BlacklistedToken {
+  id        String   @id @default(uuid()) @db.Uuid
+  tokenHash String   @unique @map("token_hash") @db.VarChar(255)
+  expiresAt DateTime @map("expires_at")
+  reason    String?  @db.VarChar(255)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([expiresAt])
+  @@map("blacklisted_tokens")
+}
+
+// ===========================================
+// RBAC - ROLES & PERMISSIONS (AIM-007, AIM-008)
+// ===========================================
+
+model Role {
+  id            String    @id @default(uuid()) @db.Uuid
+  name          String    @unique @db.VarChar(100)
+  displayName   String    @map("display_name") @db.VarChar(150)
+  description   String?   @db.Text
+  parentRoleId  String?   @map("parent_role_id") @db.Uuid
+  isSystem      Boolean   @default(false) @map("is_system")
+  isActive      Boolean   @default(true) @map("is_active")
+  organizationId String?  @map("organization_id") @db.Uuid
+  metadata      Json      @default("{}")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+  createdById   String?   @map("created_by") @db.Uuid
+  updatedById   String?   @map("updated_by") @db.Uuid
+
+  // Self-referencing for hierarchy
+  parentRole    Role?     @relation("RoleHierarchy", fields: [parentRoleId], references: [id], onDelete: SetNull)
+  childRoles    Role[]    @relation("RoleHierarchy")
+
+  // Relations
+  permissions   RolePermission[]
+  userRoles     UserRole[]
+  ancestors     RoleHierarchyClosure[] @relation("HierarchyAncestor")
+  descendants   RoleHierarchyClosure[] @relation("HierarchyDescendant")
+
+  createdBy     User?     @relation("RoleCreatedBy", fields: [createdById], references: [id])
+  updatedBy     User?     @relation("RoleUpdatedBy", fields: [updatedById], references: [id])
+
+  @@index([organizationId])
+  @@index([parentRoleId])
+  @@index([isActive])
+  @@map("roles")
+}
+
+model Permission {
+  id            String   @id @default(uuid()) @db.Uuid
+  resource      String   @db.VarChar(100)
+  action        String   @db.VarChar(50)
+  displayName   String   @map("display_name") @db.VarChar(150)
+  description   String?  @db.Text
+  conditions    Json?
+  isActive      Boolean  @default(true) @map("is_active")
+  module        String   @db.VarChar(50)
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  // Relations
+  rolePermissions   RolePermission[]
+  userPermissions   UserPermission[]
+
+  @@unique([resource, action])
+  @@index([module])
+  @@index([resource])
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId            String    @map("role_id") @db.Uuid
+  permissionId      String    @map("permission_id") @db.Uuid
+  conditionsOverride Json?    @map("conditions_override")
+  grantedAt         DateTime  @default(now()) @map("granted_at")
+  grantedById       String?   @map("granted_by") @db.Uuid
+
+  role              Role      @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission        Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  grantedBy         User?     @relation("PermissionGrantedBy", fields: [grantedById], references: [id])
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model UserRole {
+  id             String    @id @default(uuid()) @db.Uuid
+  userId         String    @map("user_id") @db.Uuid
+  roleId         String    @map("role_id") @db.Uuid
+  organizationId String?   @map("organization_id") @db.Uuid
+  grantedAt      DateTime  @default(now()) @map("granted_at")
+  grantedById    String?   @map("granted_by") @db.Uuid
+  expiresAt      DateTime? @map("expires_at")
+  revokedAt      DateTime? @map("revoked_at")
+  revokedById    String?   @map("revoked_by") @db.Uuid
+  reason         String?   @db.Text
+
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role           Role      @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  grantedBy      User?     @relation("RoleGrantedBy", fields: [grantedById], references: [id])
+  revokedBy      User?     @relation("RoleRevokedBy", fields: [revokedById], references: [id])
+
+  @@index([userId])
+  @@index([roleId])
+  @@index([expiresAt])
+  @@map("user_roles")
+}
+
+model UserPermission {
+  id             String    @id @default(uuid()) @db.Uuid
+  userId         String    @map("user_id") @db.Uuid
+  permissionId   String    @map("permission_id") @db.Uuid
+  isGranted      Boolean   @default(true) @map("is_granted")
+  conditions     Json?
+  grantedAt      DateTime  @default(now()) @map("granted_at")
+  expiresAt      DateTime? @map("expires_at")
+
+  user           User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permission     Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, permissionId])
+  @@map("user_permissions")
+}
+
+model RoleHierarchyClosure {
+  ancestorRoleId   String @map("ancestor_role_id") @db.Uuid
+  descendantRoleId String @map("descendant_role_id") @db.Uuid
+  depth            Int    @default(0)
+
+  ancestorRole     Role   @relation("HierarchyAncestor", fields: [ancestorRoleId], references: [id], onDelete: Cascade)
+  descendantRole   Role   @relation("HierarchyDescendant", fields: [descendantRoleId], references: [id], onDelete: Cascade)
+
+  @@id([ancestorRoleId, descendantRoleId])
+  @@map("role_hierarchy")
+}
+
+model UserPermissionCache {
+  userId      String   @id @map("user_id") @db.Uuid
+  permissions Json     @default("[]")
+  roles       Json     @default("[]")
+  computedAt  DateTime @default(now()) @map("computed_at")
+  expiresAt   DateTime @map("expires_at")
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@map("user_permission_cache")
+}
+
+// ===========================================
+// MFA - TOTP & BACKUP CODES (AIM-009, AIM-010)
+// ===========================================
+
+model MfaConfiguration {
+  id             String    @id @default(uuid()) @db.Uuid
+  userId         String    @unique @map("user_id") @db.Uuid
+  secretEncrypted String   @map("secret_encrypted") @db.VarChar(500)
+  isEnabled      Boolean   @default(false) @map("is_enabled")
+  verifiedAt     DateTime? @map("verified_at")
+  lastUsedAt     DateTime? @map("last_used_at")
+  failedAttempts Int       @default(0) @map("failed_attempts")
+  lockedUntil    DateTime? @map("locked_until")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("mfa_configurations")
+}
+
+model MfaBackupCode {
+  id            String    @id @default(uuid()) @db.Uuid
+  userId        String    @map("user_id") @db.Uuid
+  codeHash      String    @map("code_hash") @db.VarChar(255)
+  usedAt        DateTime? @map("used_at")
+  usedIpAddress String?   @map("used_ip_address") @db.VarChar(45)
+  usedUserAgent String?   @map("used_user_agent") @db.VarChar(500)
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([usedAt])
+  @@map("mfa_backup_codes")
+}
+
+model MfaChallenge {
+  id             String    @id @default(uuid()) @db.Uuid
+  userId         String    @map("user_id") @db.Uuid
+  challengeToken String    @unique @map("challenge_token") @db.VarChar(255)
+  type           String    @db.VarChar(20) // 'totp' | 'backup_code'
+  attempts       Int       @default(0)
+  maxAttempts    Int       @default(3) @map("max_attempts")
+  expiresAt      DateTime  @map("expires_at")
+  completedAt    DateTime? @map("completed_at")
+  ipAddress      String?   @map("ip_address") @db.VarChar(45)
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("mfa_challenges")
+}
+
+// ===========================================
+// AUDIT LOGGING (AIM-011)
+// ===========================================
+
+enum AuditEventType {
+  // Registration events
+  REGISTRATION_STARTED
+  REGISTRATION_DUPLICATE_ATTEMPT
+  EMAIL_VERIFICATION_SENT
+  EMAIL_VERIFIED
+  EMAIL_VERIFICATION_FAILED
+
+  // Login events
+  LOGIN_SUCCESS
+  LOGIN_FAILED
+  LOGIN_BLOCKED
+  LOGIN_MFA_REQUIRED
+  LOGIN_MFA_SUCCESS
+  LOGIN_MFA_FAILED
+
+  // Session events
+  SESSION_CREATED
+  SESSION_REFRESHED
+  SESSION_REVOKED
+  SESSION_EXPIRED
+  LOGOUT
+  LOGOUT_ALL_DEVICES
+
+  // Password events
+  PASSWORD_RESET_REQUESTED
+  PASSWORD_RESET_COMPLETED
+  PASSWORD_CHANGED
+  PASSWORD_BREACH_DETECTED
+
+  // MFA events
+  MFA_ENABLED
+  MFA_DISABLED
+  MFA_BACKUP_CODE_USED
+  MFA_BACKUP_CODES_REGENERATED
+
+  // RBAC events
+  ROLE_CREATED
+  ROLE_UPDATED
+  ROLE_DELETED
+  ROLE_PERMISSIONS_UPDATED
+  ROLE_ASSIGNED
+  ROLE_REVOKED
+  PERMISSION_CHECK_FAILED
+
+  // Profile events
+  PROFILE_UPDATED
+  PROFILE_ONBOARDING_COMPLETED
+
+  // Security events
+  ACCOUNT_LOCKED
+  ACCOUNT_UNLOCKED
+  SUSPICIOUS_ACTIVITY
+  NEW_DEVICE_LOGIN
+  NEW_LOCATION_LOGIN
+}
+
+model AuthAuditLog {
+  id            String         @id @default(uuid()) @db.Uuid
+  eventType     AuditEventType @map("event_type")
+  actorId       String?        @map("actor_id") @db.Uuid
+  targetType    String?        @map("target_type") @db.VarChar(50)
+  targetId      String?        @map("target_id") @db.Uuid
+  ipAddress     String?        @map("ip_address") @db.VarChar(45)
+  userAgent     String?        @map("user_agent") @db.VarChar(500)
+  correlationId String?        @map("correlation_id") @db.Uuid
+  metadata      Json           @default("{}")
+  success       Boolean        @default(true)
+  errorMessage  String?        @map("error_message") @db.Text
+  createdAt     DateTime       @default(now()) @map("created_at")
+
+  actor         User?          @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  target        User?          @relation("AuditTarget", fields: [targetId], references: [id], onDelete: SetNull)
+
+  @@index([eventType])
+  @@index([actorId])
+  @@index([targetId])
+  @@index([createdAt])
+  @@index([correlationId])
+  @@map("auth_audit_logs")
+}
+
+// ===========================================
+// SECURITY ALERTS & NOTIFICATIONS (AIM-012)
+// ===========================================
+
+enum AlertSeverity {
+  low
+  medium
+  high
+  critical
+}
+
+enum AlertStatus {
+  active
+  acknowledged
+  resolved
+  dismissed
+}
+
+model SecurityAlert {
+  id          String        @id @default(uuid()) @db.Uuid
+  userId      String?       @map("user_id") @db.Uuid
+  type        String        @db.VarChar(100)
+  severity    AlertSeverity
+  status      AlertStatus   @default(active)
+  title       String        @db.VarChar(255)
+  description String        @db.Text
+  metadata    Json          @default("{}")
+  ipAddress   String?       @map("ip_address") @db.VarChar(45)
+  resolvedAt  DateTime?     @map("resolved_at")
+  resolvedBy  String?       @map("resolved_by") @db.Uuid
+  createdAt   DateTime      @default(now()) @map("created_at")
+
+  user        User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  escalations AlertEscalation[]
+
+  @@index([userId])
+  @@index([type])
+  @@index([severity])
+  @@index([status])
+  @@index([createdAt])
+  @@map("security_alerts")
+}
+
+enum NotificationChannel {
+  email
+  sms
+  push
+  slack
+  teams
+  webhook
+}
+
+model NotificationSubscription {
+  id         String              @id @default(uuid()) @db.Uuid
+  userId     String              @map("user_id") @db.Uuid
+  channel    NotificationChannel
+  endpoint   String              @db.VarChar(500) // email, phone, webhook URL, etc.
+  eventTypes String[]            @map("event_types")
+  isActive   Boolean             @default(true) @map("is_active")
+  metadata   Json                @default("{}")
+  createdAt  DateTime            @default(now()) @map("created_at")
+  updatedAt  DateTime            @updatedAt @map("updated_at")
+
+  user       User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, channel, endpoint])
+  @@index([userId])
+  @@index([channel])
+  @@map("notification_subscriptions")
+}
+
+model NotificationQueue {
+  id          String              @id @default(uuid()) @db.Uuid
+  channel     NotificationChannel
+  recipient   String              @db.VarChar(500)
+  subject     String?             @db.VarChar(255)
+  content     String              @db.Text
+  metadata    Json                @default("{}")
+  status      String              @default("pending") @db.VarChar(20)
+  attempts    Int                 @default(0)
+  lastError   String?             @map("last_error") @db.Text
+  scheduledAt DateTime            @default(now()) @map("scheduled_at")
+  sentAt      DateTime?           @map("sent_at")
+  createdAt   DateTime            @default(now()) @map("created_at")
+
+  @@index([status])
+  @@index([scheduledAt])
+  @@map("notification_queue")
+}
+
+model CustomAlertRule {
+  id          String   @id @default(uuid()) @db.Uuid
+  userId      String   @map("user_id") @db.Uuid
+  name        String   @db.VarChar(100)
+  description String?  @db.Text
+  eventTypes  String[] @map("event_types")
+  conditions  Json     // { type: 'COUNT' | 'RATE' | 'UNIQUE', threshold, window }
+  severity    AlertSeverity
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@index([userId])
+  @@index([isActive])
+  @@map("custom_alert_rules")
+}
+
+model EscalationRule {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @db.VarChar(100)
+  severity    AlertSeverity
+  delayMinutes Int     @map("delay_minutes")
+  level       Int      @default(1)
+  channels    NotificationChannel[]
+  recipients  String[] // user IDs or external contacts
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  escalations AlertEscalation[]
+
+  @@index([severity])
+  @@index([isActive])
+  @@map("escalation_rules")
+}
+
+model AlertEscalation {
+  id            String          @id @default(uuid()) @db.Uuid
+  alertId       String          @map("alert_id") @db.Uuid
+  ruleId        String          @map("rule_id") @db.Uuid
+  level         Int
+  escalatedAt   DateTime        @default(now()) @map("escalated_at")
+  acknowledgedAt DateTime?      @map("acknowledged_at")
+
+  alert         SecurityAlert   @relation(fields: [alertId], references: [id], onDelete: Cascade)
+  rule          EscalationRule  @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+
+  @@index([alertId])
+  @@index([ruleId])
+  @@map("alert_escalations")
+}
+
+// ===========================================
+// RATE LIMITING TRACKING
+// ===========================================
+
+model RateLimitRecord {
+  id        String   @id @default(uuid()) @db.Uuid
+  key       String   @db.VarChar(255) // e.g., "register:ip:192.168.1.1"
+  count     Int      @default(1)
+  windowStart DateTime @map("window_start")
+  expiresAt DateTime @map("expires_at")
+
+  @@unique([key])
+  @@index([expiresAt])
+  @@map("rate_limit_records")
+}
+
+// ===========================================
+// CRM MODULE - CLIENT MANAGEMENT (CRM-001)
+// ===========================================
+
+enum ClientType {
+  company
+  individual
+}
+
+enum ClientStatus {
+  active
+  inactive
+  suspended
+  archived
+}
+
+model Client {
+  id              String       @id @default(uuid()) @db.Uuid
+  type            ClientType
+  status          ClientStatus @default(active)
+
+  // Company data (for company type)
+  companyName     String?      @map("company_name") @db.VarChar(300)
+  nip             String?      @db.VarChar(10)
+  regon           String?      @db.VarChar(14)
+  krs             String?      @db.VarChar(10)
+  legalForm       String?      @map("legal_form") @db.VarChar(100)
+  pkdCodes        String[]     @map("pkd_codes")
+
+  // Individual data (for individual type)
+  firstName       String?      @map("first_name") @db.VarChar(100)
+  lastName        String?      @map("last_name") @db.VarChar(100)
+  pesel           String?      @db.VarChar(11)
+
+  // Common data
+  displayName     String       @map("display_name") @db.VarChar(300)
+  email           String?      @db.VarChar(255)
+  phone           String?      @db.VarChar(20)
+  website         String?      @db.VarChar(500)
+
+  // Address
+  street          String?      @db.VarChar(200)
+  buildingNumber  String?      @map("building_number") @db.VarChar(20)
+  apartmentNumber String?      @map("apartment_number") @db.VarChar(20)
+  postalCode      String?      @map("postal_code") @db.VarChar(10)
+  city            String?      @db.VarChar(100)
+  voivodeship     String?      @db.VarChar(50)
+  country         String       @default("PL") @db.VarChar(2)
+
+  // GUS enrichment
+  gusEnrichedAt   DateTime?    @map("gus_enriched_at")
+  gusData         Json?        @map("gus_data")
+
+  // Ownership
+  ownerId         String       @map("owner_id") @db.Uuid
+  organizationId  String?      @map("organization_id") @db.Uuid
+
+  // Metadata
+  tags            String[]     @default([])
+  customFields    Json         @default("{}") @map("custom_fields")
+  notes           String?      @db.Text
+
+  // Timestamps
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+  archivedAt      DateTime?    @map("archived_at")
+
+  // Relations
+  contacts        ClientContact[]
+  interactions    ClientInteraction[]
+
+  @@unique([nip, organizationId])
+  @@unique([regon, organizationId])
+  @@index([type])
+  @@index([status])
+  @@index([ownerId])
+  @@index([organizationId])
+  @@index([nip])
+  @@index([regon])
+  @@index([displayName])
+  @@index([email])
+  @@index([tags])
+  @@index([createdAt])
+  @@map("clients")
+}
+
+model ClientContact {
+  id          String   @id @default(uuid()) @db.Uuid
+  clientId    String   @map("client_id") @db.Uuid
+  firstName   String   @map("first_name") @db.VarChar(100)
+  lastName    String   @map("last_name") @db.VarChar(100)
+  position    String?  @db.VarChar(100)
+  email       String?  @db.VarChar(255)
+  phone       String?  @db.VarChar(20)
+  isPrimary   Boolean  @default(false) @map("is_primary")
+  notes       String?  @db.Text
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  client      Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+  @@index([email])
+  @@map("client_contacts")
+}
+
+enum InteractionType {
+  email
+  phone
+  meeting
+  note
+  document
+  task
+  other
+}
+
+model ClientInteraction {
+  id          String          @id @default(uuid()) @db.Uuid
+  clientId    String          @map("client_id") @db.Uuid
+  userId      String          @map("user_id") @db.Uuid
+  type        InteractionType
+  subject     String          @db.VarChar(255)
+  content     String?         @db.Text
+  metadata    Json            @default("{}")
+  occurredAt  DateTime        @default(now()) @map("occurred_at")
+  createdAt   DateTime        @default(now()) @map("created_at")
+
+  client      Client          @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+  @@index([userId])
+  @@index([type])
+  @@index([occurredAt])
+  @@map("client_interactions")
+}
+
+// ===========================================
+// CRM MODULE - CUSTOM FIELDS SYSTEM (CRM-006)
+// ===========================================
+
+enum CustomFieldType {
+  TEXT
+  TEXTAREA
+  NUMBER
+  DATE
+  DATETIME
+  SELECT
+  MULTISELECT
+  CHECKBOX
+  EMAIL
+  PHONE
+  URL
+  CURRENCY
+}
+
+enum FieldVisibility {
+  ALL
+  INTERNAL
+  PORTAL
+  ADMIN_ONLY
+}
+
+model CustomFieldDefinition {
+  id              String           @id @default(uuid()) @db.Uuid
+  organizationId  String           @map("organization_id") @db.Uuid
+  name            String           @db.VarChar(100)
+  label           String           @db.VarChar(200)
+  description     String?          @db.Text
+  fieldType       CustomFieldType  @map("field_type")
+  config          Json             @default("{}")
+  isRequired      Boolean          @default(false) @map("is_required")
+  validationRules Json?            @map("validation_rules")
+  displayOrder    Int              @default(0) @map("display_order")
+  groupName       String?          @map("group_name") @db.VarChar(100)
+  visibility      FieldVisibility  @default(ALL)
+  placeholder     String?          @db.VarChar(200)
+  helpText        String?          @map("help_text") @db.Text
+  entityType      String           @default("CLIENT") @map("entity_type") @db.VarChar(50)
+  isActive        Boolean          @default(true) @map("is_active")
+  isArchived      Boolean          @default(false) @map("is_archived")
+  archivedAt      DateTime?        @map("archived_at")
+  archivedBy      String?          @map("archived_by") @db.Uuid
+  createdAt       DateTime         @default(now()) @map("created_at")
+  createdBy       String           @map("created_by") @db.Uuid
+  updatedAt       DateTime         @updatedAt @map("updated_at")
+  updatedBy       String?          @map("updated_by") @db.Uuid
+
+  values          CustomFieldValue[]
+
+  @@unique([organizationId, name, entityType])
+  @@index([organizationId])
+  @@index([entityType])
+  @@index([isActive, isArchived])
+  @@index([organizationId, groupName])
+  @@map("custom_field_definitions")
+}
+
+model CustomFieldValue {
+  id              String    @id @default(uuid()) @db.Uuid
+  fieldId         String    @map("field_id") @db.Uuid
+  entityType      String    @map("entity_type") @db.VarChar(50)
+  entityId        String    @map("entity_id") @db.Uuid
+  organizationId  String    @map("organization_id") @db.Uuid
+  valueText       String?   @map("value_text") @db.Text
+  valueNumber     Decimal?  @map("value_number") @db.Decimal(18, 4)
+  valueDate       DateTime? @map("value_date") @db.Date
+  valueDatetime   DateTime? @map("value_datetime")
+  valueBoolean    Boolean?  @map("value_boolean")
+  valueJson       Json?     @map("value_json")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  createdBy       String    @map("created_by") @db.Uuid
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  updatedBy       String?   @map("updated_by") @db.Uuid
+
+  field           CustomFieldDefinition @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+
+  @@unique([fieldId, entityId])
+  @@index([fieldId])
+  @@index([entityType, entityId])
+  @@index([organizationId])
+  @@map("custom_field_values")
+}
+
+// ===========================================
+// ACE MODULE - CHART OF ACCOUNTS (ACC-001)
+// ===========================================
+
+enum ChartAccountType {
+  asset
+  liability
+  equity
+  revenue
+  expense
+  contra_asset
+  contra_liability
+  contra_equity
+}
+
+enum AccountNature {
+  debit
+  credit
+}
+
+enum AccountStatus {
+  active
+  inactive
+  archived
+}
+
+model ChartOfAccount {
+  id              String           @id @default(uuid()) @db.Uuid
+  organizationId  String           @map("organization_id") @db.Uuid
+
+  // Account identification
+  accountCode     String           @map("account_code") @db.VarChar(20)
+  accountName     String           @map("account_name") @db.VarChar(255)
+  accountNameEn   String?          @map("account_name_en") @db.VarChar(255)
+  description     String?          @db.Text
+
+  // Classification
+  accountType     ChartAccountType @map("account_type")
+  accountClass    Int              @map("account_class") // 0-9 per Polish standards
+  accountGroup    String?          @map("account_group") @db.VarChar(100)
+  normalBalance   AccountNature    @map("normal_balance")
+
+  // Hierarchy
+  parentAccountId String?          @map("parent_account_id") @db.Uuid
+  level           Int              @default(1)
+  path            String?          @db.VarChar(500) // Materialized path for quick tree queries
+
+  // Behavior
+  allowsPosting   Boolean          @default(true) @map("allows_posting")
+  isSynthetic     Boolean          @default(false) @map("is_synthetic")
+  isSystemAccount Boolean          @default(false) @map("is_system_account")
+
+  // Status
+  status          AccountStatus    @default(active)
+
+  // Multi-currency
+  currency        String           @default("PLN") @db.VarChar(3)
+  isMultiCurrency Boolean          @default(false) @map("is_multi_currency")
+
+  // JPK compliance
+  taxCategory     String?          @map("tax_category") @db.VarChar(50)
+  jpkSymbol       String?          @map("jpk_symbol") @db.VarChar(50)
+
+  // Metadata
+  tags            String[]         @default([])
+  customFields    Json             @default("{}") @map("custom_fields")
+
+  // Audit
+  createdAt       DateTime         @default(now()) @map("created_at")
+  createdBy       String?          @map("created_by") @db.Uuid
+  updatedAt       DateTime         @updatedAt @map("updated_at")
+  updatedBy       String?          @map("updated_by") @db.Uuid
+
+  // Self-reference for hierarchy
+  parentAccount   ChartOfAccount?  @relation("AccountHierarchy", fields: [parentAccountId], references: [id], onDelete: SetNull)
+  childAccounts   ChartOfAccount[] @relation("AccountHierarchy")
+
+  // Relations
+  openingBalances OpeningBalanceItem[]
+  journalLines    JournalLine[]
+  accountBalances AccountBalance[]
+  glEntries       GeneralLedgerEntry[]
+  groupMemberships AccountGroupMember[]
+
+  @@unique([organizationId, accountCode])
+  @@index([organizationId])
+  @@index([accountType])
+  @@index([accountClass])
+  @@index([parentAccountId])
+  @@index([status])
+  @@index([path])
+  @@map("chart_of_accounts")
+}
+
+// ===========================================
+// ACE MODULE - ACCOUNT GROUPS (ACC-003)
+// ===========================================
+
+enum ReportSection {
+  BALANCE_SHEET_ASSETS
+  BALANCE_SHEET_LIABILITIES
+  BALANCE_SHEET_EQUITY
+  INCOME_STATEMENT_REVENUE
+  INCOME_STATEMENT_EXPENSES
+  CASH_FLOW
+}
+
+model AccountGroup {
+  id              String         @id @default(uuid()) @db.Uuid
+  organizationId  String         @map("organization_id") @db.Uuid
+
+  // Group identification
+  groupCode       String         @map("group_code") @db.VarChar(50)
+  groupName       String         @map("group_name") @db.VarChar(255)
+  groupNameEn     String?        @map("group_name_en") @db.VarChar(255)
+
+  // Hierarchy
+  parentGroupId   String?        @map("parent_group_id") @db.Uuid
+  level           Int            @default(0)
+  path            String         @db.VarChar(500) // Materialized path for hierarchy queries
+
+  // Report mapping
+  reportSection   ReportSection? @map("report_section")
+  reportPosition  String?        @map("report_position") @db.VarChar(50) // A.I, A.II, B.I, etc.
+
+  // Metadata
+  description     String?        @db.Text
+  sortOrder       Int            @default(0) @map("sort_order")
+  isActive        Boolean        @default(true) @map("is_active")
+
+  // Audit
+  createdAt       DateTime       @default(now()) @map("created_at")
+  createdBy       String?        @map("created_by") @db.Uuid
+  updatedAt       DateTime       @updatedAt @map("updated_at")
+  updatedBy       String?        @map("updated_by") @db.Uuid
+
+  // Self-reference for hierarchy
+  parentGroup     AccountGroup?  @relation("GroupHierarchy", fields: [parentGroupId], references: [id], onDelete: SetNull)
+  childGroups     AccountGroup[] @relation("GroupHierarchy")
+
+  // Relations
+  members         AccountGroupMember[]
+
+  @@unique([organizationId, groupCode])
+  @@index([organizationId])
+  @@index([parentGroupId])
+  @@index([path])
+  @@index([reportSection])
+  @@index([isActive])
+  @@map("account_groups")
+}
+
+model AccountGroupMember {
+  id        String   @id @default(uuid()) @db.Uuid
+  groupId   String   @map("group_id") @db.Uuid
+  accountId String   @map("account_id") @db.Uuid
+  sortOrder Int      @default(0) @map("sort_order")
+
+  // Audit
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  group     AccountGroup   @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  account   ChartOfAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, accountId])
+  @@index([groupId])
+  @@index([accountId])
+  @@map("account_group_members")
+}
+
+// ===========================================
+// ACE MODULE - FISCAL YEARS & PERIODS (ACC-004)
+// ===========================================
+
+enum FiscalYearStatus {
+  draft
+  open
+  closed
+  locked
+}
+
+enum PeriodStatus {
+  open
+  soft_closed
+  closed
+}
+
+enum PeriodType {
+  regular
+  adjusting
+  opening
+  closing
+}
+
+model FiscalYear {
+  id                    String           @id @default(uuid()) @db.Uuid
+  organizationId        String           @map("organization_id") @db.Uuid
+
+  // Year identification
+  yearCode              String           @map("year_code") @db.VarChar(20)
+  name                  String           @db.VarChar(100)
+
+  // Date range
+  startDate             DateTime         @map("start_date") @db.Date
+  endDate               DateTime         @map("end_date") @db.Date
+
+  // Status
+  status                FiscalYearStatus @default(draft)
+  isCurrent             Boolean          @default(false) @map("is_current")
+
+  // Closing
+  retainedEarningsAccountId String?      @map("retained_earnings_account_id") @db.Uuid
+  closingEntryId        String?          @map("closing_entry_id") @db.Uuid
+  closedAt              DateTime?        @map("closed_at")
+  closedBy              String?          @map("closed_by") @db.Uuid
+
+  // Audit
+  createdAt             DateTime         @default(now()) @map("created_at")
+  createdBy             String?          @map("created_by") @db.Uuid
+  updatedAt             DateTime         @updatedAt @map("updated_at")
+  updatedBy             String?          @map("updated_by") @db.Uuid
+
+  // Relations
+  periods               AccountingPeriod[]
+  openingBalanceBatches OpeningBalanceBatch[]
+  journalEntries        JournalEntry[]
+
+  @@unique([organizationId, yearCode])
+  @@index([organizationId])
+  @@index([status])
+  @@index([isCurrent])
+  @@index([startDate, endDate])
+  @@map("fiscal_years")
+}
+
+model AccountingPeriod {
+  id            String       @id @default(uuid()) @db.Uuid
+  fiscalYearId  String       @map("fiscal_year_id") @db.Uuid
+
+  // Period identification
+  periodNumber  Int          @map("period_number") // 1-13 (13 for adjusting period)
+  name          String       @db.VarChar(100)
+
+  // Date range
+  startDate     DateTime     @map("start_date") @db.Date
+  endDate       DateTime     @map("end_date") @db.Date
+
+  // Type and status
+  periodType    PeriodType   @default(regular) @map("period_type")
+  status        PeriodStatus @default(open)
+
+  // Locking
+  lockedAt      DateTime?    @map("locked_at")
+  lockedBy      String?      @map("locked_by") @db.Uuid
+  lockReason    String?      @map("lock_reason") @db.VarChar(255)
+
+  // Audit
+  createdAt     DateTime     @default(now()) @map("created_at")
+  updatedAt     DateTime     @updatedAt @map("updated_at")
+
+  // Relations
+  fiscalYear    FiscalYear   @relation(fields: [fiscalYearId], references: [id], onDelete: Cascade)
+  journalEntries JournalEntry[]
+  periodLocks   PeriodLock[]
+
+  @@unique([fiscalYearId, periodNumber])
+  @@index([fiscalYearId])
+  @@index([status])
+  @@index([startDate, endDate])
+  @@map("accounting_periods")
+}
+
+model PeriodLock {
+  id          String           @id @default(uuid()) @db.Uuid
+  periodId    String           @map("period_id") @db.Uuid
+  lockType    String           @map("lock_type") @db.VarChar(50) // FULL, ACCOUNT_TYPE, ACCOUNT
+  targetId    String?          @map("target_id") @db.Uuid // Account ID if lockType is ACCOUNT
+  targetType  String?          @map("target_type") @db.VarChar(50)
+  reason      String?          @db.VarChar(255)
+  lockedAt    DateTime         @default(now()) @map("locked_at")
+  lockedBy    String           @map("locked_by") @db.Uuid
+
+  period      AccountingPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+
+  @@index([periodId])
+  @@index([lockType])
+  @@map("period_locks")
+}
+
+// ===========================================
+// ACE MODULE - ACCOUNT TEMPLATES (ACC-002)
+// ===========================================
+
+model AccountTemplate {
+  id               String   @id @default(uuid()) @db.Uuid
+
+  // Template metadata
+  templateCode     String   @unique @map("template_code") @db.VarChar(50)
+  templateName     String   @map("template_name") @db.VarChar(255)
+  templateNameEn   String?  @map("template_name_en") @db.VarChar(255)
+  description      String?  @db.Text
+
+  // Categorization
+  businessType     String?  @map("business_type") @db.VarChar(100) // trade, service, manufacturing, general
+  companySize      String?  @map("company_size") @db.VarChar(50)   // small, medium, large
+
+  // Version control
+  version          String   @default("1.0") @db.VarChar(20)
+  isActive         Boolean  @default(true) @map("is_active")
+  isSystemTemplate Boolean  @default(true) @map("is_system_template")
+
+  // Statistics
+  accountCount     Int      @map("account_count")
+
+  // Audit
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  accounts         TemplateAccount[]
+  applications     TemplateApplication[]
+
+  @@index([businessType])
+  @@index([companySize])
+  @@index([isActive])
+  @@map("account_templates")
+}
+
+model TemplateAccount {
+  id                String          @id @default(uuid()) @db.Uuid
+  templateId        String          @map("template_id") @db.Uuid
+
+  // Account definition
+  accountCode       String          @map("account_code") @db.VarChar(20)
+  accountName       String          @map("account_name") @db.VarChar(255)
+  accountNameEn     String?         @map("account_name_en") @db.VarChar(255)
+
+  // Classification
+  accountType       ChartAccountType @map("account_type")
+  accountClass      Int             @map("account_class") // 0-9
+  accountGroup      String?         @map("account_group") @db.VarChar(100)
+  parentAccountCode String?         @map("parent_account_code") @db.VarChar(20)
+
+  // Behavior
+  normalBalance     AccountNature   @map("normal_balance")
+  allowsPosting     Boolean         @default(true) @map("allows_posting")
+
+  // JPK compliance
+  taxCategory       String?         @map("tax_category") @db.VarChar(50)
+  jpkSymbol         String?         @map("jpk_symbol") @db.VarChar(50)
+
+  // Ordering
+  sortOrder         Int             @map("sort_order")
+
+  // Relations
+  template          AccountTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@unique([templateId, accountCode])
+  @@index([templateId])
+  @@index([accountClass])
+  @@map("template_accounts")
+}
+
+model TemplateApplication {
+  id              String          @id @default(uuid()) @db.Uuid
+  organizationId  String          @map("organization_id") @db.Uuid
+  templateId      String          @map("template_id") @db.Uuid
+  appliedBy       String          @map("applied_by") @db.Uuid
+  appliedAt       DateTime        @default(now()) @map("applied_at")
+  accountsCreated Int             @map("accounts_created")
+  customizations  Json?           // Modifications made during application
+
+  // Relations
+  template        AccountTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([templateId])
+  @@map("template_applications")
+}
+
+// ===========================================
+// ACE MODULE - OPENING BALANCES (ACC-005)
+// ===========================================
+
+enum OpeningBalanceStatus {
+  draft
+  verified
+  posted
+}
+
+model OpeningBalanceBatch {
+  id              String               @id @default(uuid()) @db.Uuid
+  organizationId  String               @map("organization_id") @db.Uuid
+  fiscalYearId    String               @map("fiscal_year_id") @db.Uuid
+
+  // Status
+  status          OpeningBalanceStatus @default(draft)
+
+  // Totals
+  totalDebit      Decimal              @default(0) @map("total_debit") @db.Decimal(19, 4)
+  totalCredit     Decimal              @default(0) @map("total_credit") @db.Decimal(19, 4)
+  isBalanced      Boolean              @default(false) @map("is_balanced")
+
+  // Posting
+  postedAt        DateTime?            @map("posted_at")
+  postedBy        String?              @map("posted_by") @db.Uuid
+  journalEntryId  String?              @map("journal_entry_id") @db.Uuid
+
+  // Audit
+  createdAt       DateTime             @default(now()) @map("created_at")
+  createdBy       String               @map("created_by") @db.Uuid
+  updatedAt       DateTime             @updatedAt @map("updated_at")
+
+  // Relations
+  fiscalYear      FiscalYear           @relation(fields: [fiscalYearId], references: [id], onDelete: Cascade)
+  items           OpeningBalanceItem[]
+
+  @@unique([organizationId, fiscalYearId])
+  @@index([organizationId])
+  @@index([status])
+  @@map("opening_balance_batches")
+}
+
+model OpeningBalanceItem {
+  id            String              @id @default(uuid()) @db.Uuid
+  batchId       String              @map("batch_id") @db.Uuid
+  accountId     String              @map("account_id") @db.Uuid
+
+  // Balances
+  openingDebit  Decimal             @default(0) @map("opening_debit") @db.Decimal(19, 4)
+  openingCredit Decimal             @default(0) @map("opening_credit") @db.Decimal(19, 4)
+
+  // Notes
+  notes         String?             @db.Text
+
+  // Audit
+  createdAt     DateTime            @default(now()) @map("created_at")
+  updatedAt     DateTime            @updatedAt @map("updated_at")
+
+  // Relations
+  batch         OpeningBalanceBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  account       ChartOfAccount      @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([batchId, accountId])
+  @@index([batchId])
+  @@index([accountId])
+  @@map("opening_balance_items")
+}
+
+// ===========================================
+// ACE MODULE - JOURNAL ENTRIES (ACC-006)
+// ===========================================
+
+enum JournalEntryType {
+  STANDARD
+  ADJUSTMENT
+  CLOSING
+  OPENING
+  REVERSAL
+  RECURRING
+}
+
+enum JournalEntryStatus {
+  DRAFT
+  PENDING
+  POSTED
+  REVERSED
+}
+
+model JournalEntry {
+  id                String             @id @default(uuid()) @db.Uuid
+  organizationId    String             @map("organization_id") @db.Uuid
+  periodId          String             @map("period_id") @db.Uuid
+  fiscalYearId      String             @map("fiscal_year_id") @db.Uuid
+
+  // Entry identification
+  entryNumber       String             @map("entry_number") @db.VarChar(50)
+  entryDate         DateTime           @map("entry_date") @db.Date
+  entryType         JournalEntryType   @default(STANDARD) @map("entry_type")
+  status            JournalEntryStatus @default(DRAFT)
+
+  // Content
+  description       String             @db.VarChar(500)
+  reference         String?            @db.VarChar(100)
+  sourceDocumentId  String?            @map("source_document_id") @db.Uuid
+
+  // Totals
+  totalDebit        Decimal            @default(0) @map("total_debit") @db.Decimal(19, 4)
+  totalCredit       Decimal            @default(0) @map("total_credit") @db.Decimal(19, 4)
+
+  // Multi-currency
+  baseCurrency      String             @default("PLN") @map("base_currency") @db.VarChar(3)
+
+  // Workflow
+  requiresApproval  Boolean            @default(false) @map("requires_approval")
+  approvedAt        DateTime?          @map("approved_at")
+  approvedBy        String?            @map("approved_by") @db.Uuid
+
+  // Posting
+  postedAt          DateTime?          @map("posted_at")
+  postedBy          String?            @map("posted_by") @db.Uuid
+
+  // Reversal tracking
+  reversedEntryId   String?            @map("reversed_entry_id") @db.Uuid
+  reversalEntryId   String?            @map("reversal_entry_id") @db.Uuid
+
+  // Recurring
+  recurringEntryId  String?            @map("recurring_entry_id") @db.Uuid
+
+  // Template
+  templateEntryId   String?            @map("template_entry_id") @db.Uuid
+
+  // Audit
+  createdAt         DateTime           @default(now()) @map("created_at")
+  createdBy         String             @map("created_by") @db.Uuid
+  updatedAt         DateTime           @updatedAt @map("updated_at")
+  updatedBy         String?            @map("updated_by") @db.Uuid
+
+  // Relations
+  period            AccountingPeriod   @relation(fields: [periodId], references: [id])
+  fiscalYear        FiscalYear         @relation(fields: [fiscalYearId], references: [id])
+  lines             JournalLine[]
+  glEntries         GeneralLedgerEntry[]
+
+  @@unique([organizationId, entryNumber])
+  @@index([organizationId])
+  @@index([periodId])
+  @@index([fiscalYearId])
+  @@index([entryType])
+  @@index([status])
+  @@index([entryDate])
+  @@index([postedAt])
+  @@map("journal_entries")
+}
+
+model JournalLine {
+  id             String         @id @default(uuid()) @db.Uuid
+  entryId        String         @map("entry_id") @db.Uuid
+  lineNumber     Int            @map("line_number")
+  accountId      String         @map("account_id") @db.Uuid
+
+  // Amounts
+  debitAmount    Decimal        @default(0) @map("debit_amount") @db.Decimal(19, 4)
+  creditAmount   Decimal        @default(0) @map("credit_amount") @db.Decimal(19, 4)
+
+  // Multi-currency
+  currency       String         @default("PLN") @db.VarChar(3)
+  exchangeRate   Decimal        @default(1) @map("exchange_rate") @db.Decimal(10, 6)
+  baseDebitAmount  Decimal      @default(0) @map("base_debit_amount") @db.Decimal(19, 4)
+  baseCreditAmount Decimal      @default(0) @map("base_credit_amount") @db.Decimal(19, 4)
+
+  // Description
+  description    String?        @db.VarChar(500)
+
+  // Cost center (future)
+  costCenterId   String?        @map("cost_center_id") @db.Uuid
+
+  // Relations
+  entry          JournalEntry   @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  account        ChartOfAccount @relation(fields: [accountId], references: [id])
+
+  @@unique([entryId, lineNumber])
+  @@index([entryId])
+  @@index([accountId])
+  @@map("journal_lines")
+}
+
+// Entry numbering sequences
+model EntryNumberSequence {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  entryType      String   @map("entry_type") @db.VarChar(20)
+  year           Int
+  month          Int
+  lastNumber     Int      @default(0) @map("last_number")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@unique([organizationId, entryType, year, month])
+  @@map("entry_number_sequences")
+}
+
+// ===========================================
+// ACE MODULE - GENERAL LEDGER (ACC-008)
+// ===========================================
+
+model GeneralLedgerEntry {
+  id             String         @id @default(uuid()) @db.Uuid
+  organizationId String         @map("organization_id") @db.Uuid
+  entryId        String         @map("entry_id") @db.Uuid
+  lineId         String         @map("line_id") @db.Uuid
+  accountId      String         @map("account_id") @db.Uuid
+  periodId       String         @map("period_id") @db.Uuid
+
+  // Entry details
+  entryDate      DateTime       @map("entry_date") @db.Date
+  entryNumber    String         @map("entry_number") @db.VarChar(50)
+
+  // Amounts
+  debitAmount    Decimal        @default(0) @map("debit_amount") @db.Decimal(19, 4)
+  creditAmount   Decimal        @default(0) @map("credit_amount") @db.Decimal(19, 4)
+
+  // Running balance
+  runningBalance Decimal        @default(0) @map("running_balance") @db.Decimal(19, 4)
+
+  // Posting
+  postedAt       DateTime       @map("posted_at")
+
+  // Relations
+  entry          JournalEntry   @relation(fields: [entryId], references: [id])
+  account        ChartOfAccount @relation(fields: [accountId], references: [id])
+
+  @@index([organizationId])
+  @@index([accountId])
+  @@index([periodId])
+  @@index([entryDate])
+  @@index([entryId])
+  @@map("general_ledger")
+}
+
+model AccountBalance {
+  id              String         @id @default(uuid()) @db.Uuid
+  accountId       String         @map("account_id") @db.Uuid
+  periodId        String         @map("period_id") @db.Uuid
+  organizationId  String         @map("organization_id") @db.Uuid
+
+  // Balances
+  openingBalance  Decimal        @default(0) @map("opening_balance") @db.Decimal(19, 4)
+  debitMovements  Decimal        @default(0) @map("debit_movements") @db.Decimal(19, 4)
+  creditMovements Decimal        @default(0) @map("credit_movements") @db.Decimal(19, 4)
+  closingBalance  Decimal        @default(0) @map("closing_balance") @db.Decimal(19, 4)
+
+  // Audit
+  lastUpdated     DateTime       @default(now()) @map("last_updated")
+
+  // Relations
+  account         ChartOfAccount @relation(fields: [accountId], references: [id])
+
+  @@unique([accountId, periodId])
+  @@index([accountId])
+  @@index([periodId])
+  @@index([organizationId])
+  @@map("account_balances")
+}
+
+// ===========================================
+// ACE MODULE - ENTRY TEMPLATES (ACC-009)
+// ===========================================
+
+model EntryTemplate {
+  id              String   @id @default(uuid()) @db.Uuid
+  organizationId  String   @map("organization_id") @db.Uuid
+
+  // Template identification
+  templateCode    String   @map("template_code") @db.VarChar(50)
+  templateName    String   @map("template_name") @db.VarChar(255)
+  description     String?  @db.Text
+
+  // Template content
+  linesTemplate   Json     @map("lines_template") // Array of line configurations
+
+  // Settings
+  isActive        Boolean  @default(true) @map("is_active")
+
+  // Audit
+  createdAt       DateTime @default(now()) @map("created_at")
+  createdBy       String   @map("created_by") @db.Uuid
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@unique([organizationId, templateCode])
+  @@index([organizationId])
+  @@index([isActive])
+  @@map("entry_templates")
+}
+
+// ===========================================
+// ACE MODULE - RECURRING ENTRIES (ACC-010)
+// ===========================================
+
+enum RecurringFrequency {
+  DAILY
+  WEEKLY
+  MONTHLY
+  QUARTERLY
+  YEARLY
+}
+
+model RecurringEntry {
+  id              String             @id @default(uuid()) @db.Uuid
+  organizationId  String             @map("organization_id") @db.Uuid
+
+  // Template reference
+  templateId      String             @map("template_id") @db.Uuid
+
+  // Scheduling
+  frequency       RecurringFrequency
+  dayOfMonth      Int?               @map("day_of_month") // For monthly/quarterly/yearly
+  dayOfWeek       Int?               @map("day_of_week")  // For weekly (0=Sunday)
+
+  // Dates
+  startDate       DateTime           @map("start_date") @db.Date
+  endDate         DateTime?          @map("end_date") @db.Date
+  nextRunDate     DateTime           @map("next_run_date") @db.Date
+  lastRunDate     DateTime?          @map("last_run_date") @db.Date
+
+  // Behavior
+  isActive        Boolean            @default(true) @map("is_active")
+  autoPost        Boolean            @default(false) @map("auto_post")
+
+  // Statistics
+  timesExecuted   Int                @default(0) @map("times_executed")
+
+  // Audit
+  createdAt       DateTime           @default(now()) @map("created_at")
+  createdBy       String             @map("created_by") @db.Uuid
+  updatedAt       DateTime           @updatedAt @map("updated_at")
+
+  @@index([organizationId])
+  @@index([nextRunDate])
+  @@index([isActive])
+  @@map("recurring_entries")
+}
+
+// ===========================================
+// DOC MODULE - DOCUMENT MANAGEMENT (DOC-001)
+// ===========================================
+
+enum DocumentStatus {
+  PENDING_UPLOAD
+  UPLOADING
+  UPLOADED
+  PROCESSING
+  PROCESSED
+  FAILED
+  ARCHIVED
+  DELETED
+}
+
+enum DocumentCategory {
+  INVOICE
+  RECEIPT
+  CONTRACT
+  BANK_STATEMENT
+  TAX_DOCUMENT
+  PAYROLL
+  CORRESPONDENCE
+  REPORT
+  OTHER
+}
+
+enum DocumentSource {
+  MANUAL_UPLOAD
+  EMAIL_IMPORT
+  API_IMPORT
+  SCAN
+  GENERATED
+  KSEF_IMPORT
+  BANK_IMPORT
+}
+
+enum DocProcessingStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+  SKIPPED
+}
+
+enum SupportedFileType {
+  PDF
+  PNG
+  JPG
+  JPEG
+  TIFF
+  DOC
+  DOCX
+  XLS
+  XLSX
+  CSV
+  XML
+  TXT
+}
+
+enum DocumentVisibility {
+  PRIVATE
+  ORGANIZATION
+  CLIENT_VISIBLE
+  PUBLIC
+}
+
+model Document {
+  id              String           @id @default(uuid()) @db.Uuid
+  organizationId  String           @map("organization_id") @db.Uuid
+  clientId        String?          @map("client_id") @db.Uuid
+
+  // File metadata
+  fileName        String           @map("file_name") @db.VarChar(500)
+  originalFileName String          @map("original_file_name") @db.VarChar(500)
+  fileType        SupportedFileType @map("file_type")
+  mimeType        String           @map("mime_type") @db.VarChar(100)
+  fileSize        Int              @map("file_size")
+  filePath        String           @map("file_path") @db.VarChar(1000)
+
+  // Storage info
+  storageProvider String           @default("local") @map("storage_provider") @db.VarChar(50)
+  storageBucket   String?          @map("storage_bucket") @db.VarChar(255)
+  storageKey      String           @map("storage_key") @db.VarChar(500)
+  checksumMd5     String?          @map("checksum_md5") @db.VarChar(32)
+  checksumSha256  String?          @map("checksum_sha256") @db.VarChar(64)
+
+  // Classification and categorization
+  category        DocumentCategory?
+  subcategory     String?          @db.VarChar(100)
+  documentType    String?          @map("document_type") @db.VarChar(100)
+  source          DocumentSource
+
+  // Metadata
+  title           String?          @db.VarChar(500)
+  description     String?          @db.Text
+  documentDate    DateTime?        @map("document_date") @db.Date
+  documentNumber  String?          @map("document_number") @db.VarChar(100)
+  referenceNumber String?          @map("reference_number") @db.VarChar(100)
+
+  // Status
+  status          DocumentStatus   @default(PENDING_UPLOAD)
+  visibility      DocumentVisibility @default(ORGANIZATION)
+
+  // Processing status
+  ocrStatus       DocProcessingStatus @default(PENDING) @map("ocr_status")
+  extractionStatus DocProcessingStatus @default(PENDING) @map("extraction_status")
+  classificationStatus DocProcessingStatus @default(PENDING) @map("classification_status")
+
+  // Related entities
+  journalEntryId  String?          @map("journal_entry_id") @db.Uuid
+  vatTransactionId String?         @map("vat_transaction_id") @db.Uuid
+  invoiceId       String?          @map("invoice_id") @db.Uuid
+
+  // Version control
+  versionNumber   Int              @default(1) @map("version_number")
+  isLatestVersion Boolean          @default(true) @map("is_latest_version")
+  parentDocumentId String?         @map("parent_document_id") @db.Uuid
+
+  // Tags and search
+  tags            String[]         @default([])
+  customMetadata  Json?            @map("custom_metadata")
+
+  // Full-text search content
+  searchContent   String?          @map("search_content") @db.Text
+
+  // Audit
+  uploadedBy      String           @map("uploaded_by") @db.Uuid
+  uploadedAt      DateTime         @default(now()) @map("uploaded_at")
+  processedAt     DateTime?        @map("processed_at")
+  archivedAt      DateTime?        @map("archived_at")
+  deletedAt       DateTime?        @map("deleted_at")
+  createdAt       DateTime         @default(now()) @map("created_at")
+  updatedAt       DateTime         @updatedAt @map("updated_at")
+
+  // Self-reference for versions
+  parentDocument  Document?        @relation("DocumentVersions", fields: [parentDocumentId], references: [id], onDelete: SetNull)
+  childVersions   Document[]       @relation("DocumentVersions")
+
+  // Relations
+  versions        DocumentVersion[]
+  extractions     DocumentExtraction[]
+
+  @@index([organizationId])
+  @@index([clientId])
+  @@index([category])
+  @@index([source])
+  @@index([status])
+  @@index([fileType])
+  @@index([documentDate])
+  @@index([uploadedAt])
+  @@index([tags])
+  @@index([isLatestVersion])
+  @@index([parentDocumentId])
+  @@map("documents")
+}
+
+// ===========================================
+// DOC MODULE - DOCUMENT VERSIONING (DOC-006)
+// ===========================================
+
+enum VersionChangeType {
+  CREATED
+  UPLOADED
+  METADATA_UPDATED
+  CONTENT_REPLACED
+  REPROCESSED
+  RESTORED
+  MERGED
+}
+
+enum VersionStatus {
+  ACTIVE
+  SUPERSEDED
+  ARCHIVED
+  DELETED
+}
+
+model DocumentVersion {
+  id              String           @id @default(uuid()) @db.Uuid
+  documentId      String           @map("document_id") @db.Uuid
+  versionNumber   Int              @map("version_number")
+
+  // Version status
+  status          VersionStatus    @default(ACTIVE)
+  isLatest        Boolean          @default(false) @map("is_latest")
+
+  // File information
+  fileName        String           @map("file_name") @db.VarChar(500)
+  fileType        SupportedFileType @map("file_type")
+  fileSize        Int              @map("file_size")
+  storageKey      String           @map("storage_key") @db.VarChar(500)
+  checksumMd5     String?          @map("checksum_md5") @db.VarChar(32)
+  checksumSha256  String?          @map("checksum_sha256") @db.VarChar(64)
+
+  // Change information
+  changeType      VersionChangeType @map("change_type")
+  changeDescription String?        @map("change_description") @db.VarChar(1000)
+  changedFields   String[]         @default([]) @map("changed_fields")
+
+  // Metadata snapshot
+  metadataSnapshot Json?           @map("metadata_snapshot")
+
+  // Previous version reference
+  previousVersionId String?        @map("previous_version_id") @db.Uuid
+
+  // Audit
+  createdBy       String           @map("created_by") @db.Uuid
+  createdAt       DateTime         @default(now()) @map("created_at")
+
+  // Relations
+  document        Document         @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, versionNumber])
+  @@index([documentId])
+  @@index([status])
+  @@index([isLatest])
+  @@index([createdAt])
+  @@map("document_versions")
+}
+
+// ===========================================
+// DOC MODULE - DOCUMENT EXTRACTION (DOC-003)
+// ===========================================
+
+enum ExtractionType {
+  OCR
+  AI_EXTRACTION
+  CLASSIFICATION
+  COMBINED
+}
+
+enum ExtractionStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+  PARTIAL
+}
+
+model DocumentExtraction {
+  id              String           @id @default(uuid()) @db.Uuid
+  documentId      String           @map("document_id") @db.Uuid
+  versionNumber   Int              @map("version_number")
+
+  // Extraction type
+  extractionType  ExtractionType   @map("extraction_type")
+  status          ExtractionStatus @default(PENDING)
+
+  // OCR results
+  rawText         String?          @map("raw_text") @db.Text
+  ocrConfidence   Decimal?         @map("ocr_confidence") @db.Decimal(5, 4)
+  ocrLanguage     String?          @map("ocr_language") @db.VarChar(10)
+  ocrEngine       String?          @map("ocr_engine") @db.VarChar(50)
+
+  // AI extracted data
+  extractedData   Json?            @map("extracted_data")
+  extractionConfidence Decimal?    @map("extraction_confidence") @db.Decimal(5, 4)
+  extractionModel String?          @map("extraction_model") @db.VarChar(100)
+
+  // Classification results
+  classifiedCategory DocumentCategory? @map("classified_category")
+  classificationConfidence Decimal? @map("classification_confidence") @db.Decimal(5, 4)
+  classificationAlternatives Json?  @map("classification_alternatives")
+
+  // Processing metadata
+  processingTimeMs Int?            @map("processing_time_ms")
+  errorMessage    String?          @map("error_message") @db.Text
+  errorCode       String?          @map("error_code") @db.VarChar(50)
+
+  // User feedback
+  userValidated   Boolean          @default(false) @map("user_validated")
+  userCorrectedData Json?          @map("user_corrected_data")
+  validatedBy     String?          @map("validated_by") @db.Uuid
+  validatedAt     DateTime?        @map("validated_at")
+
+  // Audit
+  startedAt       DateTime?        @map("started_at")
+  completedAt     DateTime?        @map("completed_at")
+  createdAt       DateTime         @default(now()) @map("created_at")
+  updatedAt       DateTime         @updatedAt @map("updated_at")
+
+  // Relations
+  document        Document         @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, versionNumber, extractionType])
+  @@index([documentId])
+  @@index([extractionType])
+  @@index([status])
+  @@index([createdAt])
+  @@map("document_extractions")
+}
+
+// ===========================================
+// DOC MODULE - VERSION RETENTION POLICIES (DOC-006)
+// ===========================================
+
+model VersionRetentionPolicy {
+  id              String           @id @default(uuid()) @db.Uuid
+  organizationId  String?          @map("organization_id") @db.Uuid
+  name            String           @db.VarChar(100)
+  description     String?          @db.VarChar(500)
+
+  // Retention rules
+  maxVersions     Int?             @map("max_versions")
+  maxAgeInDays    Int?             @map("max_age_in_days")
+  keepFirstVersion Boolean         @default(true) @map("keep_first_version")
+  keepLatestVersion Boolean        @default(true) @map("keep_latest_version")
+  keepMajorVersions Boolean        @default(false) @map("keep_major_versions")
+
+  // Application scope
+  applyToCategories DocumentCategory[] @map("apply_to_categories")
+
+  // Status
+  isActive        Boolean          @default(true) @map("is_active")
+
+  // Audit
+  createdAt       DateTime         @default(now()) @map("created_at")
+  updatedAt       DateTime         @updatedAt @map("updated_at")
+
+  @@index([organizationId])
+  @@index([isActive])
+  @@map("version_retention_policies")
+}
+
+// ===========================================
+// DOC MODULE - UPLOAD SESSIONS (DOC-001)
+// ===========================================
+
+enum UploadSessionStatus {
+  PENDING
+  URL_GENERATED
+  UPLOADING
+  COMPLETED
+  CANCELLED
+  EXPIRED
+  FAILED
+}
+
+model UploadSession {
+  id              String           @id @default(uuid()) @db.Uuid
+  organizationId  String           @map("organization_id") @db.Uuid
+  userId          String           @map("user_id") @db.Uuid
+
+  // File info
+  fileName        String           @map("file_name") @db.VarChar(500)
+  fileSize        Int              @map("file_size")
+  mimeType        String           @map("mime_type") @db.VarChar(100)
+  fileType        SupportedFileType @map("file_type")
+
+  // Storage details
+  storageBucket   String           @map("storage_bucket") @db.VarChar(255)
+  storageKey      String           @map("storage_key") @db.VarChar(500)
+  uploadUrl       String?          @map("upload_url") @db.Text
+  uploadId        String?          @map("upload_id") @db.VarChar(500) // For multipart uploads
+
+  // Status
+  status          UploadSessionStatus @default(PENDING)
+  progress        Int              @default(0) // 0-100 percentage
+
+  // Result
+  documentId      String?          @map("document_id") @db.Uuid
+  checksumMd5     String?          @map("checksum_md5") @db.VarChar(32)
+  checksumSha256  String?          @map("checksum_sha256") @db.VarChar(64)
+
+  // Error handling
+  errorMessage    String?          @map("error_message") @db.Text
+  errorCode       String?          @map("error_code") @db.VarChar(50)
+  retryCount      Int              @default(0) @map("retry_count")
+
+  // Timing
+  expiresAt       DateTime         @map("expires_at")
+  startedAt       DateTime?        @map("started_at")
+  completedAt     DateTime?        @map("completed_at")
+  cancelledAt     DateTime?        @map("cancelled_at")
+  createdAt       DateTime         @default(now()) @map("created_at")
+  updatedAt       DateTime         @updatedAt @map("updated_at")
+
+  @@index([organizationId])
+  @@index([userId])
+  @@index([status])
+  @@index([expiresAt])
+  @@index([storageKey])
+  @@map("upload_sessions")
+}
