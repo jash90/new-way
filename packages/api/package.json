@@ -1,0 +1,33 @@
+{
+  "name": "@ksiegowacrm/api",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:unit": "vitest run --reporter=verbose",
+    "test:integration": "vitest run --config vitest.integration.config.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.22.0",
+    "@ksiegowacrm/auth": "workspace:*",
+    "@ksiegowacrm/db": "workspace:*",
+    "@ksiegowacrm/shared": "workspace:*",
+    "@trpc/server": "^11.0.0-rc.0",
+    "date-fns": "^4.1.0",
+    "decimal.js": "^10.6.0",
+    "ioredis": "^5.3.0",
+    "nodemailer": "^6.9.0",
+    "uuid": "^9.0.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/decimal.js": "^7.4.3",
+    "@types/nodemailer": "^6.4.14",
+    "@types/uuid": "^9.0.8",
+    "typescript": "^5.3.0",
+    "vitest": "^2.1.0"
+  }
+}
