@@ -1,0 +1,37 @@
+{
+  "name": "ksiegowacrm",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI-powered Polish Accounting CRM Platform",
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "test": "turbo test",
+    "test:unit": "turbo test:unit",
+    "test:integration": "turbo test:integration",
+    "test:e2e": "playwright test",
+    "lint": "turbo lint",
+    "typecheck": "turbo typecheck",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
+    "clean": "turbo clean && rm -rf node_modules",
+    "db:generate": "pnpm --filter @ksiegowacrm/db db:generate",
+    "db:push": "pnpm --filter @ksiegowacrm/db db:push",
+    "db:migrate": "pnpm --filter @ksiegowacrm/db db:migrate",
+    "db:studio": "pnpm --filter @ksiegowacrm/db db:studio"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.40.0",
+    "@types/node": "^20.10.0",
+    "prettier": "^3.2.0",
+    "turbo": "^2.3.0",
+    "typescript": "^5.3.0",
+    "vitest": "^2.1.0"
+  },
+  "pnpm": {
+    "overrides": {}
+  }
+}
